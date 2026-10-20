@@ -1,0 +1,106 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Unzip project
+        run: |
+          mkdir work
+          unzip -q ./*.zip -d work
+          ls work
+
+      - name: Generate Android folder, add native code, patch config
+        working-directory: work/context_pulse
+        run: |
+          # Changed org name here so it doesn't clash with the old app package ID
+          flutter create --org dev.contextpulse2 --project-name context_pulse --platforms android /tmp/gen
+          cp -r /tmp/gen/android ./android
+          cp -r android_overlay/app/src/main/* android/app/src/main/
+          cat > patch.py <<'PYEOF'
+          import re, pathlib, sys
+
+          man = pathlib.Path("android/app/src/main/AndroidManifest.xml")
+          if man.exists():
+              m = man.read_text()
+              perms = """
+                  <uses-permission android:name="android.permission.INTERNET"/>
+                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+                  <uses-permission android:name="android.permission.READ_CALENDAR"/>
+                  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
+                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+                  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+                  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+                  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
+              """
+              comps = """
+                      <receiver android:name=".PulseWidgetProvider" android:exported="true" android:label="ContextPulse">
+                          <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+                          <meta-data android:name="android.appwidget.provider" android:resource="@xml/pulse_widget_info"/>
+                      </receiver>
+                      <receiver android:name=".ActivityTransitionReceiver" android:exported="true">
+                          <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
+                      </receiver>
+                      <service android:name=".FocusTileService" android:exported="true" android:icon="@drawable/ic_tile"
+                          android:label="@string/tile_focus" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+                          <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
+                      </service>
+                      <service android:name=".ScanTileService" android:exported="true" android:icon="@drawable/ic_tile"
+                          android:label="@string/tile_scan" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+                          <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
+                      </service>
+              """
+              if "PulseWidgetProvider" not in m:
+                  m, n1 = re.subn(r"(<manifest[^>]*>)", lambda x: x.group(1) + perms, m, count=1)
+                  m, n2 = re.subn(r"<application", '<application android:allowBackup="false" android:enableOnBackInvokedCallback="true"', m, count=1)
+                  m, n3 = re.subn(r"</application>", lambda x: comps + "    </application>", m, count=1)
+                  man.write_text(m)
+
+          gp = pathlib.Path("android/app/build.gradle.kts")
+          if gp.exists():
+              g = gp.read_text()
+              if "coreLibraryDesugaring" not in g:
+                  g, a = re.subn(r"compileOptions\s*\{", "compileOptions {\n        isCoreLibraryDesugaringEnabled = true", g, count=1)
+                  g, b = re.subn(r"minSdk\s*=\s*flutter\.minSdkVersion", "minSdk = 24", g, count=1)
+                  g += """
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+              implementation("com.google.android.gms:play-services-location:21.3.0")
+              implementation("com.google.android.play:integrity:1.4.0")
+          }
+          """
+                  gp.write_text(g)
+          print("patched OK")
+          PYEOF
+          python3 patch.py
+
+      - name: Relax Kotlin JVM check
+        working-directory: work/context_pulse
+        run: |
+          echo "kotlin.jvm.target.validation.mode=IGNORE" >> android/gradle.properties
+
+      - name: Build APK
+        working-directory: work/context_pulse
+        run: |
+          flutter pub get
+          flutter build apk --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: contextpulse-v2-apk
+          path: work/context_pulse/build/app/outputs/flutter-apk/app-release.apk
