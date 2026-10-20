@@ -36,13 +36,20 @@ jobs:
           cat > patch.py <<'PYEOF'
           import re, pathlib, sys
 
-          # Override workmanager version in pubspec.yaml to fix old embedding errors
+          # Override workmanager version in pubspec.yaml
           sp = pathlib.Path("pubspec.yaml")
           if sp.exists():
               s = sp.read_text()
               if "dependency_overrides:" not in s:
                   s += "\ndependency_overrides:\n  workmanager: ^0.10.10\n"
               sp.write_text(s)
+
+          # Fix workmanager policy type mismatch in background_service.dart
+          bs = pathlib.Path("lib/application/background_service.dart")
+          if bs.exists():
+              b = bs.read_text()
+              b = b.replace("ExistingWorkPolicy.keep", "ExistingPeriodicWorkPolicy.keep")
+              bs.write_text(b)
 
           man = pathlib.Path("android/app/src/main/AndroidManifest.xml")
           if man.exists():
