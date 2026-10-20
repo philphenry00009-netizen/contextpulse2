@@ -30,9 +30,19 @@ jobs:
         run: |
           flutter create --org dev.contextpulse2 --project-name context_pulse --platforms android /tmp/gen
           cp -r /tmp/gen/android ./android
-          if [ -d android_overlay ]; then
-            cp -r android_overlay/app/src/main/* android/app/src/main/
+
+          # Copy custom Android resources (res folder) from project if they exist
+          if [ -d android/app/src/main/res ]; then
+            cp -rn android/app/src/main/res/* /tmp/gen/android/app/src/main/res/ 2>/dev/null || true
           fi
+          if [ -d android_overlay/app/src/main/res ]; then
+            cp -r android_overlay/app/src/main/res/* /tmp/gen/android/app/src/main/res/
+          fi
+          
+          # Replace generated android folder with the fully merged one
+          rm -rf ./android
+          cp -r /tmp/gen/android ./android
+
           cat > patch.py <<'PYEOF'
           import re, pathlib, sys
 
@@ -51,41 +61,15 @@ jobs:
               b = b.replace("ExistingWorkPolicy.keep", "ExistingPeriodicWorkPolicy.keep")
               bs.write_text(b)
 
+          # Ensure allowBackup is false in AndroidManifest
           man = pathlib.Path("android/app/src/main/AndroidManifest.xml")
           if man.exists():
               m = man.read_text()
-              perms = """
-                  <uses-permission android:name="android.permission.INTERNET"/>
-                  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-                  <uses-permission android:name="android.permission.READ_CALENDAR"/>
-                  <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION"/>
-                  <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
-                  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
-                  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-                  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
-              """
-              comps = """
-                      <receiver android:name=".PulseWidgetProvider" android:exported="true" android:label="ContextPulse">
-                          <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
-                          <meta-data android:name="android.appwidget.provider" android:resource="@xml/pulse_widget_info"/>
-                      </receiver>
-                      <receiver android:name=".ActivityTransitionReceiver" android:exported="true">
-                          <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
-                      </receiver>
-                      <service android:name=".FocusTileService" android:exported="true" android:icon="@drawable/ic_tile"
-                          android:label="@string/tile_focus" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
-                          <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
-                      </service>
-                      <service android:name=".ScanTileService" android:exported="true" android:icon="@drawable/ic_tile"
-                          android:label="@string/tile_scan" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
-                          <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
-                      </service>
-              """
-              if "PulseWidgetProvider" not in m:
-                  m, n1 = re.subn(r"(<manifest[^>]*>)", lambda x: x.group(1) + perms, m, count=1)
-                  m, n2 = re.subn(r"<application", '<application android:allowBackup="false" android:enableOnBackInvokedCallback="true"', m, count=1)
-                  m, n3 = re.subn(r"</application>", lambda x: comps + "    </application>", m, count=1)
-                  man.write_text(m)
+              if "android:allowBackup" not in m:
+                  m = m.replace("<application", '<application android:allowBackup="false" android:enableOnBackInvokedCallback="true"')
+              else:
+                  m = re.sub(r'android:allowBackup="[^"]*"', 'android:allowBackup="false"', m)
+              man.write_text(m)
 
           gp = pathlib.Path("android/app/build.gradle.kts")
           if gp.exists():
