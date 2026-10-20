@@ -36,6 +36,14 @@ jobs:
           cat > patch.py <<'PYEOF'
           import re, pathlib, sys
 
+          # Override workmanager version in pubspec.yaml to fix old embedding errors
+          sp = pathlib.Path("pubspec.yaml")
+          if sp.exists():
+              s = sp.read_text()
+              if "dependency_overrides:" not in s:
+                  s += "\ndependency_overrides:\n  workmanager: ^0.10.10\n"
+              sp.write_text(s)
+
           man = pathlib.Path("android/app/src/main/AndroidManifest.xml")
           if man.exists():
               m = man.read_text()
